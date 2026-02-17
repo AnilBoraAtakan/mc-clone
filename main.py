@@ -24,9 +24,10 @@ BASE_HEIGHT = 3
 HEIGHT_VARIATION = 2
 MAX_HEIGHT = 7
 
-PLAYER_HEIGHT = 2.0
-PLAYER_RADIUS = 0.49
-CAMERA_OFFSET_FROM_TOP = 0.5
+PLAYER_HEIGHT = 1.8
+PLAYER_RADIUS = 0.30
+PLAYER_MODEL_BLOCK_SCALE = PLAYER_HEIGHT / 2.0
+CAMERA_OFFSET_FROM_TOP = PLAYER_MODEL_BLOCK_SCALE * 0.5
 WALK_SPEED = 5.0
 SPRINT_SPEED = 8.0
 GRAVITY = 24.0
@@ -138,11 +139,13 @@ class MinecraftClone(ShowBase):
 
         self.player_lower_block = self.cube_model.copyTo(self.player_model_root)
         self.player_lower_block.setTexture(self.block_textures["dirt"], 1)
-        self.player_lower_block.setPos(0, 0, 0.5)
+        self.player_lower_block.setScale(PLAYER_MODEL_BLOCK_SCALE)
+        self.player_lower_block.setPos(0, 0, PLAYER_MODEL_BLOCK_SCALE * 0.5)
 
         self.player_upper_block = self.cube_model.copyTo(self.player_model_root)
         self.player_upper_block.setTexture(self.block_textures["stone"], 1)
-        self.player_upper_block.setPos(0, 0, 1.5)
+        self.player_upper_block.setScale(PLAYER_MODEL_BLOCK_SCALE)
+        self.player_upper_block.setPos(0, 0, PLAYER_MODEL_BLOCK_SCALE * 1.5)
 
     def update_player_model(self):
         feet_z = self.player_pos.z - PLAYER_HEIGHT
@@ -396,7 +399,7 @@ class MinecraftClone(ShowBase):
 
     def collides_with_block(self, next_x: float, next_y: float, next_z: float) -> bool:
         foot_z = next_z - PLAYER_HEIGHT
-        body_samples = (0.08, PLAYER_HEIGHT * 0.55, PLAYER_HEIGHT * 0.95)
+        body_samples = (0.06, PLAYER_HEIGHT * 0.55, PLAYER_HEIGHT - 0.02)
         corner_offsets = (
             (-PLAYER_RADIUS, -PLAYER_RADIUS),
             (PLAYER_RADIUS, -PLAYER_RADIUS),
