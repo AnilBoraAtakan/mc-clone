@@ -397,7 +397,22 @@ class MinecraftClone(ShowBase):
                     return True
         return False
 
-    def highest_ground_z(self, world_x: float, world_y: float) -> float:
+    def highest_layer_below_limit(self, column_key: tuple[int, int], limit: float) -> int | None:
+        layers = self.column_layers.get(column_key)
+        if not layers:
+            return None
+
+        top = self.column_tops.get(column_key)
+        if top is not None and top <= limit:
+            return top
+
+        best = None
+        for layer in layers:
+            if layer <= limit and (best is None or layer > best):
+                best = layer
+        return best
+
+    def highest_ground_z(self, world_x: float, world_y: float, feet_z: float, support_tolerance: float) -> float:
         corner_offsets = (
             (-PLAYER_RADIUS, -PLAYER_RADIUS),
             (PLAYER_RADIUS, -PLAYER_RADIUS),
@@ -406,10 +421,11 @@ class MinecraftClone(ShowBase):
         )
 
         highest = -9999.0
+        max_support_layer = feet_z + support_tolerance - 1.0
         for offset_x, offset_y in corner_offsets:
             bx = int(floor(world_x + offset_x))
             bz = int(floor(world_y + offset_y))
-            column_top = self.column_tops.get((bx, bz))
+            column_top = self.highest_layer_below_limit((bx, bz), max_support_layer)
             if column_top is not None:
                 highest = max(highest, column_top + 1.0)
         return highest
@@ -453,8 +469,9 @@ class MinecraftClone(ShowBase):
         self.player_velocity_z -= GRAVITY * dt
         self.player_pos.z += self.player_velocity_z * dt
 
-        ground_z = self.highest_ground_z(self.player_pos.x, self.player_pos.y)
         feet_z = self.player_pos.z - PLAYER_HEIGHT
+        support_tolerance = max(0.3, min(1.5, (-self.player_velocity_z * dt) + 0.05))
+        ground_z = self.highest_ground_z(self.player_pos.x, self.player_pos.y, feet_z, support_tolerance)
 
         if feet_z < ground_z:
             self.player_pos.z = ground_z + PLAYER_HEIGHT

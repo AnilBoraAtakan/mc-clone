@@ -131,3 +131,88 @@ class HeadlessE2ETest(unittest.TestCase):
             )
         finally:
             game.destroy()
+
+    def test_player_does_not_teleport_up_under_reverse_l_overhang(self):
+        platform_size = 12
+        platform_level = 0
+        wall_row_z = platform_size - 2
+        wall_start_x = 4
+        wall_end_x = 8
+
+        game = MinecraftClone(capture_mouse=False)
+        try:
+            self.clear_world(game)
+
+            for x in range(platform_size):
+                for z in range(platform_size):
+                    game.add_block((x, platform_level, z), "stone")
+
+            for x in range(wall_start_x, wall_end_x):
+                game.add_block((x, platform_level + 1, wall_row_z), "dirt")
+                game.add_block((x, platform_level + 2, wall_row_z), "dirt")
+                game.add_block((x, platform_level + 3, wall_row_z), "dirt")
+
+            for x in range(wall_start_x, wall_end_x):
+                for z in (wall_row_z - 1, wall_row_z - 2, wall_row_z - 3):
+                    game.add_block((x, platform_level + 4, z), "dirt")
+
+            game.collect_dirty_chunks(max(len(game.dirty_chunk_keys), 1))
+
+            game.player_pos = Vec3((wall_start_x + wall_end_x) / 2.0, 3.0, 3.0)
+            game.player_velocity_z = 0.0
+            game.yaw = 0.0
+            game.pitch = 0.0
+            game.update_player_model()
+            game.update_camera()
+            self.step_world(game, frames=10)
+            self.render_frames(game)
+
+            start_path = ARTIFACT_DIR / "reverse_l_overhang_start.png"
+            under_path = ARTIFACT_DIR / "reverse_l_overhang_under.png"
+
+            self.assertTrue(game.win.getScreenshot().write(str(start_path)))
+            self.assertTrue(start_path.exists())
+            self.assertGreater(start_path.stat().st_size, 0)
+
+            start_height = game.player_pos.z
+            start_block_vertical_y = game.world_to_block_key(
+                game.player_pos.x, game.player_pos.y, game.player_pos.z
+            )[1]
+
+            game.set_key("w", True)
+            self.step_world(game, frames=55)
+            game.set_key("w", False)
+            self.render_frames(game)
+
+            self.assertTrue(game.win.getScreenshot().write(str(under_path)))
+            self.assertTrue(under_path.exists())
+            self.assertGreater(under_path.stat().st_size, 0)
+
+            end_height = game.player_pos.z
+            end_block_vertical_y = game.world_to_block_key(
+                game.player_pos.x, game.player_pos.y, game.player_pos.z
+            )[1]
+
+            self.assertGreaterEqual(
+                game.player_pos.y,
+                wall_row_z - 3.5,
+                msg="Player did not reach the reverse-L overhang area",
+            )
+            self.assertLessEqual(
+                end_height,
+                start_height + 0.25,
+                msg=(
+                    "Player teleported upward while moving under overhang. "
+                    f"start_z={start_height:.2f}, end_z={end_height:.2f}"
+                ),
+            )
+            self.assertLessEqual(
+                end_block_vertical_y,
+                start_block_vertical_y,
+                msg=(
+                    "Player block vertical y increased under overhang. "
+                    f"start_y={start_block_vertical_y}, end_y={end_block_vertical_y}"
+                ),
+            )
+        finally:
+            game.destroy()
