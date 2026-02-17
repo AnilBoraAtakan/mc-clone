@@ -6,6 +6,7 @@ from pathlib import Path
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
+    BitMask32,
     LineSegs,
     RigidBodyCombiner,
     SamplerState,
@@ -23,8 +24,9 @@ BASE_HEIGHT = 3
 HEIGHT_VARIATION = 2
 MAX_HEIGHT = 7
 
-PLAYER_HEIGHT = 1.75
-PLAYER_RADIUS = 0.28
+PLAYER_HEIGHT = 2.0
+PLAYER_RADIUS = 0.49
+CAMERA_OFFSET_FROM_TOP = 0.5
 WALK_SPEED = 5.0
 SPRINT_SPEED = 8.0
 GRAVITY = 24.0
@@ -33,6 +35,7 @@ REACH_DISTANCE = 7.5
 MOUSE_SENSITIVITY = 0.12
 CHUNK_SIZE = 8
 CHUNK_COLLECTS_PER_FRAME = 2
+CAMERA_NEAR_CLIP = 0.05
 
 BLOCK_TEXTURE_FILES = {
     "grass": "grass_block.png",
@@ -65,10 +68,15 @@ def block_type_for_layer(y: int, top: int) -> str:
 
 
 class MinecraftClone(ShowBase):
-    def __init__(self):
+    def __init__(self, capture_mouse: bool = True):
         super().__init__()
         self.disableMouse()
         self.setBackgroundColor(0.49, 0.72, 0.98, 1)
+        self.camLens.setNear(CAMERA_NEAR_CLIP)
+        self.world_camera_mask = BitMask32.bit(1)
+        self.cam.node().setCameraMask(self.world_camera_mask)
+        self.capture_mouse = capture_mouse
+        self.mouse_capture_enabled = False
 
         self.texture_dir = Path(__file__).resolve().parent / "assets" / "textures"
         self.block_textures = self.load_block_textures()
@@ -104,9 +112,13 @@ class MinecraftClone(ShowBase):
         }
 
         self.setup_controls()
+        self.create_player_model()
         self.create_crosshair()
         self.create_help_text()
-        self.enable_mouse_capture()
+        if self.capture_mouse:
+            self.mouse_capture_enabled = self.enable_mouse_capture()
+        self.update_player_model()
+        self.update_camera()
 
         self.taskMgr.add(self.update, "update")
 
@@ -119,6 +131,23 @@ class MinecraftClone(ShowBase):
             texture.setMinfilter(SamplerState.FT_nearest)
             textures[block_type] = texture
         return textures
+
+    def create_player_model(self):
+        self.player_model_root = self.render.attachNewNode("player_model")
+        self.player_model_root.hide(self.world_camera_mask)
+
+        self.player_lower_block = self.cube_model.copyTo(self.player_model_root)
+        self.player_lower_block.setTexture(self.block_textures["dirt"], 1)
+        self.player_lower_block.setPos(0, 0, 0.5)
+
+        self.player_upper_block = self.cube_model.copyTo(self.player_model_root)
+        self.player_upper_block.setTexture(self.block_textures["stone"], 1)
+        self.player_upper_block.setPos(0, 0, 1.5)
+
+    def update_player_model(self):
+        feet_z = self.player_pos.z - PLAYER_HEIGHT
+        self.player_model_root.setPos(self.player_pos.x, self.player_pos.y, feet_z)
+        self.player_model_root.setHpr(self.yaw, 0, 0)
 
     def world_to_block_key(self, world_x: float, world_y: float, world_z: float) -> tuple[int, int, int]:
         # Panda3D axes are (x, y, z) where z is vertical.
@@ -267,13 +296,21 @@ class MinecraftClone(ShowBase):
     def set_key(self, key: str, value: bool):
         self.keys[key] = value
 
-    def enable_mouse_capture(self):
+    def enable_mouse_capture(self) -> bool:
+        if self.win is None:
+            return False
+        if not hasattr(self.win, "requestProperties") or not hasattr(self.win, "movePointer"):
+            return False
+
         props = WindowProperties()
         props.setCursorHidden(True)
         self.win.requestProperties(props)
         self.center_pointer()
+        return True
 
     def center_pointer(self):
+        if self.win is None or not hasattr(self.win, "movePointer"):
+            return
         center_x = self.win.getXSize() // 2
         center_y = self.win.getYSize() // 2
         self.win.movePointer(0, center_x, center_y)
@@ -311,7 +348,13 @@ class MinecraftClone(ShowBase):
         )
 
     def update_mouse_look(self):
-        if not self.win.getProperties().getForeground():
+        if not self.mouse_capture_enabled:
+            return
+        if self.win is None or not hasattr(self.win, "getPointer"):
+            return
+
+        window_props = self.win.getProperties()
+        if hasattr(window_props, "getForeground") and not window_props.getForeground():
             return
 
         center_x = self.win.getXSize() // 2
@@ -427,7 +470,11 @@ class MinecraftClone(ShowBase):
             self.player_velocity_z = 0.0
 
     def update_camera(self):
-        self.camera.setPos(self.player_pos)
+        self.camera.setPos(
+            self.player_pos.x,
+            self.player_pos.y,
+            self.player_pos.z - CAMERA_OFFSET_FROM_TOP,
+        )
         self.camera.setHpr(self.yaw, self.pitch, 0)
 
     def raycast_block(self):
@@ -492,9 +539,9 @@ class MinecraftClone(ShowBase):
     def update(self, task):
         dt = globalClock.getDt()
         self.update_mouse_look()
-        self.update_camera()
         self.apply_horizontal_movement(dt)
         self.apply_vertical_physics(dt)
+        self.update_player_model()
         self.update_camera()
         self.collect_dirty_chunks(CHUNK_COLLECTS_PER_FRAME)
         return task.cont
