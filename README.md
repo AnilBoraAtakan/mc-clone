@@ -27,3 +27,16 @@ python main.py
 - `Left click`: place block
 - `Right click`: remove block
 - `Esc`: quit
+
+## Headless E2E test
+
+Run the offscreen end-to-end render tests (include screenshot capture):
+
+```bash
+.venv/bin/python -m unittest tests/test_headless_e2e.py
+```
+
+The suite includes:
+- A render smoke test with screenshot output.
+- A dedicated camera-wall environment: a small platform with a 2-block-high wall on one side, scripted movement into the wall, and assertions to detect camera wall clipping / seeing through walls.
+- Screenshot artifacts are written to `test_artifacts/`.
