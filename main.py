@@ -7,6 +7,7 @@ from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
     LineSegs,
+    RigidBodyCombiner,
     SamplerState,
     TextNode,
     Vec3,
@@ -30,12 +31,23 @@ GRAVITY = 24.0
 JUMP_SPEED = 8.5
 REACH_DISTANCE = 7.5
 MOUSE_SENSITIVITY = 0.12
+CHUNK_SIZE = 8
+CHUNK_COLLECTS_PER_FRAME = 2
 
 BLOCK_TEXTURE_FILES = {
     "grass": "grass_block.png",
     "dirt": "dirt_block.png",
     "stone": "stone_block.png",
 }
+
+NEIGHBOR_OFFSETS = (
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+)
 
 
 def terrain_height(x: int, z: int) -> int:
@@ -64,6 +76,11 @@ class MinecraftClone(ShowBase):
         self.blocks: dict[tuple[int, int, int], str] = {}
         self.block_nodes = {}
         self.column_tops: dict[tuple[int, int], int] = {}
+        self.column_layers: dict[tuple[int, int], set[int]] = {}
+        self.chunk_combiners: dict[tuple[int, int], RigidBodyCombiner] = {}
+        self.chunk_roots = {}
+        self.block_chunk_keys = {}
+        self.dirty_chunk_keys: set[tuple[int, int]] = set()
 
         self.cube_model = self.loader.loadModel("models/box")
         self.generate_world(WORLD_SIZE)
@@ -111,50 +128,131 @@ class MinecraftClone(ShowBase):
         x, y, z = key
         return Vec3(x, z, y)
 
-    def add_block(self, key: tuple[int, int, int], block_type: str):
-        if key in self.blocks:
+    def chunk_key_from_block_key(self, key: tuple[int, int, int]) -> tuple[int, int]:
+        x, _, z = key
+        return (x // CHUNK_SIZE, z // CHUNK_SIZE)
+
+    def ensure_chunk(self, chunk_key: tuple[int, int]):
+        chunk_root = self.chunk_roots.get(chunk_key)
+        if chunk_root is not None:
+            return chunk_root
+
+        chunk_combiner = RigidBodyCombiner(f"chunk_{chunk_key[0]}_{chunk_key[1]}")
+        chunk_root = self.render.attachNewNode(chunk_combiner)
+        self.chunk_combiners[chunk_key] = chunk_combiner
+        self.chunk_roots[chunk_key] = chunk_root
+        return chunk_root
+
+    def collect_dirty_chunks(self, max_chunks: int):
+        if not self.dirty_chunk_keys:
             return
 
-        node = self.cube_model.copyTo(self.render)
+        chunk_keys = list(self.dirty_chunk_keys)[:max_chunks]
+        for chunk_key in chunk_keys:
+            chunk_combiner = self.chunk_combiners.get(chunk_key)
+            if chunk_combiner is not None:
+                chunk_combiner.collect()
+            self.dirty_chunk_keys.discard(chunk_key)
+
+    def create_block_node(self, key: tuple[int, int, int], block_type: str):
+        chunk_key = self.chunk_key_from_block_key(key)
+        chunk_root = self.ensure_chunk(chunk_key)
+        node = self.cube_model.copyTo(chunk_root)
         node.setPos(self.block_key_to_world_center(key))
         node.setTexture(self.block_textures[block_type], 1)
         self.block_nodes[key] = node
-        self.blocks[key] = block_type
+        self.block_chunk_keys[key] = chunk_key
+        self.dirty_chunk_keys.add(chunk_key)
 
+    def remove_block_node(self, key: tuple[int, int, int]):
+        node = self.block_nodes.pop(key, None)
+        chunk_key = self.block_chunk_keys.pop(key, None)
+        if node is not None:
+            node.removeNode()
+        if chunk_key is not None:
+            self.dirty_chunk_keys.add(chunk_key)
+
+    def insert_block_data(self, key: tuple[int, int, int], block_type: str):
+        self.blocks[key] = block_type
         x, y, z = key
         column_key = (x, z)
-        current_top = self.column_tops.get(column_key)
-        if current_top is None or y > current_top:
+        if column_key not in self.column_layers:
+            self.column_layers[column_key] = set()
+        self.column_layers[column_key].add(y)
+
+        top = self.column_tops.get(column_key)
+        if top is None or y > top:
             self.column_tops[column_key] = y
+
+    def delete_block_data(self, key: tuple[int, int, int]):
+        del self.blocks[key]
+        x, y, z = key
+        column_key = (x, z)
+        layers = self.column_layers.get(column_key)
+
+        if layers is None:
+            self.column_tops.pop(column_key, None)
+            return
+
+        layers.discard(y)
+        if not layers:
+            del self.column_layers[column_key]
+            self.column_tops.pop(column_key, None)
+            return
+
+        if self.column_tops.get(column_key) == y:
+            self.column_tops[column_key] = max(layers)
+
+    def is_block_exposed(self, key: tuple[int, int, int]) -> bool:
+        x, y, z = key
+        for dx, dy, dz in NEIGHBOR_OFFSETS:
+            neighbor_key = (x + dx, y + dy, z + dz)
+            if neighbor_key not in self.blocks:
+                return True
+        return False
+
+    def refresh_block_visibility(self, key: tuple[int, int, int]):
+        if key not in self.blocks:
+            self.remove_block_node(key)
+            return
+
+        if self.is_block_exposed(key):
+            if key not in self.block_nodes:
+                self.create_block_node(key, self.blocks[key])
+            return
+
+        self.remove_block_node(key)
+
+    def refresh_visibility_around(self, key: tuple[int, int, int]):
+        self.refresh_block_visibility(key)
+        x, y, z = key
+        for dx, dy, dz in NEIGHBOR_OFFSETS:
+            neighbor_key = (x + dx, y + dy, z + dz)
+            self.refresh_block_visibility(neighbor_key)
+
+    def add_block(self, key: tuple[int, int, int], block_type: str):
+        if key in self.blocks:
+            return
+        self.insert_block_data(key, block_type)
+        self.refresh_visibility_around(key)
 
     def remove_block(self, key: tuple[int, int, int]):
         if key not in self.blocks:
             return
-
-        self.block_nodes[key].removeNode()
-        del self.block_nodes[key]
-        del self.blocks[key]
-
-        x, _, z = key
-        column_key = (x, z)
-
-        top = None
-        for candidate_key in self.blocks:
-            bx, by, bz = candidate_key
-            if bx == x and bz == z and (top is None or by > top):
-                top = by
-
-        if top is None:
-            self.column_tops.pop(column_key, None)
-        else:
-            self.column_tops[column_key] = top
+        self.delete_block_data(key)
+        self.refresh_visibility_around(key)
 
     def generate_world(self, size: int):
         for x in range(size):
             for z in range(size):
                 top = terrain_height(x, z)
                 for y in range(top):
-                    self.add_block((x, y, z), block_type_for_layer(y, top))
+                    self.insert_block_data((x, y, z), block_type_for_layer(y, top))
+
+        for key, block_type in self.blocks.items():
+            if self.is_block_exposed(key):
+                self.create_block_node(key, block_type)
+        self.collect_dirty_chunks(max(len(self.dirty_chunk_keys), 1))
 
     def setup_controls(self):
         for key in ("w", "a", "s", "d", "shift"):
@@ -354,7 +452,7 @@ class MinecraftClone(ShowBase):
 
     def on_right_click(self):
         hit_key, _ = self.raycast_block()
-        if hit_key and hit_key[1] > 0:
+        if hit_key:
             self.remove_block(hit_key)
 
     def block_overlaps_player(self, key: tuple[int, int, int]) -> bool:
@@ -398,6 +496,7 @@ class MinecraftClone(ShowBase):
         self.apply_horizontal_movement(dt)
         self.apply_vertical_physics(dt)
         self.update_camera()
+        self.collect_dirty_chunks(CHUNK_COLLECTS_PER_FRAME)
         return task.cont
 
 
