@@ -28,6 +28,26 @@ python main.py
 - `Right click`: remove block
 - `Esc`: quit
 
+## Screenshots
+
+### Main stage
+
+![Main stage](docs/screenshots/main_stage.png)
+
+### Test environments
+
+Camera wall setup:
+
+![Camera wall test](docs/screenshots/test_camera_wall_start.png)
+
+Reverse-L overhang setup:
+
+![Reverse-L overhang test](docs/screenshots/test_reverse_l_overhang_under.png)
+
+Low-overhang jump setup:
+
+![Low overhang jump test](docs/screenshots/test_low_overhang_jump_start.png)
+
 ## Headless E2E test
 
 Run the offscreen end-to-end render tests (include screenshot capture):
@@ -40,4 +60,5 @@ The suite includes:
 - A render smoke test with screenshot output.
 - A dedicated camera-wall environment: a small platform with a 2-block-high wall on one side, scripted movement into the wall, and assertions to detect camera wall clipping / seeing through walls.
 - A reverse-L overhang environment: a platform with a 3-block-high wall plus overhang extension, scripted movement under the extension, and assertions that fail if player vertical position increases unexpectedly.
+- A low-overhang jump environment: similar reverse-L setup with a lowered overhead ceiling, scripted jump while under the ceiling, and assertions that fail if the player phases upward through the block above.
 - Screenshot artifacts are written to `test_artifacts/`.

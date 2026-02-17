@@ -216,3 +216,88 @@ class HeadlessE2ETest(unittest.TestCase):
             )
         finally:
             game.destroy()
+
+    def test_player_cannot_phase_up_through_low_overhang_when_jumping(self):
+        platform_size = 12
+        platform_level = 0
+        wall_row_z = platform_size - 2
+        wall_start_x = 4
+        wall_end_x = 8
+
+        game = MinecraftClone(capture_mouse=False)
+        try:
+            self.clear_world(game)
+
+            for x in range(platform_size):
+                for z in range(platform_size):
+                    game.add_block((x, platform_level, z), "stone")
+
+            for x in range(wall_start_x, wall_end_x):
+                game.add_block((x, platform_level + 1, wall_row_z), "dirt")
+                game.add_block((x, platform_level + 2, wall_row_z), "dirt")
+                game.add_block((x, platform_level + 3, wall_row_z), "dirt")
+
+            # Low overhang: underside is at player head height when standing on the platform.
+            for x in range(wall_start_x, wall_end_x):
+                for z in (wall_row_z - 1, wall_row_z - 2, wall_row_z - 3):
+                    game.add_block((x, platform_level + 3, z), "dirt")
+
+            game.collect_dirty_chunks(max(len(game.dirty_chunk_keys), 1))
+
+            game.player_pos = Vec3((wall_start_x + wall_end_x) / 2.0, wall_row_z - 2.2, 3.0)
+            game.player_velocity_z = 0.0
+            game.yaw = 0.0
+            game.pitch = 0.0
+            game.update_player_model()
+            game.update_camera()
+            self.step_world(game, frames=8)
+            self.render_frames(game)
+
+            start_path = ARTIFACT_DIR / "low_overhang_jump_start.png"
+            jump_path = ARTIFACT_DIR / "low_overhang_jump_after.png"
+
+            self.assertTrue(game.win.getScreenshot().write(str(start_path)))
+            self.assertTrue(start_path.exists())
+            self.assertGreater(start_path.stat().st_size, 0)
+
+            start_height = game.player_pos.z
+            start_block_vertical_y = game.world_to_block_key(
+                game.player_pos.x, game.player_pos.y, game.player_pos.z
+            )[1]
+
+            game.try_jump()
+
+            max_height_during_jump = game.player_pos.z
+            max_block_vertical_y = start_block_vertical_y
+            for _ in range(40):
+                self.step_world(game, frames=1)
+                max_height_during_jump = max(max_height_during_jump, game.player_pos.z)
+                current_block_vertical_y = game.world_to_block_key(
+                    game.player_pos.x, game.player_pos.y, game.player_pos.z
+                )[1]
+                max_block_vertical_y = max(max_block_vertical_y, current_block_vertical_y)
+
+            self.render_frames(game)
+
+            self.assertTrue(game.win.getScreenshot().write(str(jump_path)))
+            self.assertTrue(jump_path.exists())
+            self.assertGreater(jump_path.stat().st_size, 0)
+
+            self.assertLessEqual(
+                max_height_during_jump,
+                start_height + 0.20,
+                msg=(
+                    "Player phased upward through low overhang while jumping. "
+                    f"start_z={start_height:.2f}, max_z={max_height_during_jump:.2f}"
+                ),
+            )
+            self.assertLessEqual(
+                max_block_vertical_y,
+                start_block_vertical_y,
+                msg=(
+                    "Player moved into a higher vertical block layer under low overhang. "
+                    f"start_y={start_block_vertical_y}, max_y={max_block_vertical_y}"
+                ),
+            )
+        finally:
+            game.destroy()

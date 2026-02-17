@@ -370,9 +370,25 @@ class MinecraftClone(ShowBase):
         self.center_pointer()
 
     def try_jump(self):
-        if self.player_grounded:
+        if self.player_grounded and self.has_headroom():
             self.player_velocity_z = JUMP_SPEED
             self.player_grounded = False
+
+    def has_headroom(self, margin: float = 0.02) -> bool:
+        sample_offsets = (
+            (0.0, 0.0),
+            (-PLAYER_RADIUS, -PLAYER_RADIUS),
+            (PLAYER_RADIUS, -PLAYER_RADIUS),
+            (-PLAYER_RADIUS, PLAYER_RADIUS),
+            (PLAYER_RADIUS, PLAYER_RADIUS),
+        )
+        sample_z = self.player_pos.z + margin
+        for offset_x, offset_y in sample_offsets:
+            sample_x = self.player_pos.x + offset_x
+            sample_y = self.player_pos.y + offset_y
+            if self.block_exists_at_world(sample_x, sample_y, sample_z):
+                return False
+        return True
 
     def block_exists_at_world(self, world_x: float, world_y: float, world_z: float) -> bool:
         key = self.world_to_block_key(world_x, world_y, world_z)
@@ -467,7 +483,12 @@ class MinecraftClone(ShowBase):
 
     def apply_vertical_physics(self, dt: float):
         self.player_velocity_z -= GRAVITY * dt
-        self.player_pos.z += self.player_velocity_z * dt
+        next_z = self.player_pos.z + self.player_velocity_z * dt
+
+        if self.player_velocity_z > 0 and self.collides_with_block(self.player_pos.x, self.player_pos.y, next_z):
+            self.player_velocity_z = 0.0
+        else:
+            self.player_pos.z = next_z
 
         feet_z = self.player_pos.z - PLAYER_HEIGHT
         support_tolerance = max(0.3, min(1.5, (-self.player_velocity_z * dt) + 0.05))
