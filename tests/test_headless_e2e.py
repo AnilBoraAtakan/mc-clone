@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 import unittest
 
 from panda3d.core import Vec3, loadPrcFileData
@@ -9,7 +10,7 @@ loadPrcFileData("", "show-frame-rate-meter #f")
 loadPrcFileData("", "win-size 960 540")
 loadPrcFileData("", "sync-video #f")
 
-from main import CHUNK_COLLECTS_PER_FRAME, MinecraftClone
+from main import CHUNK_COLLECTS_PER_FRAME, PLAYER_HEIGHT, MinecraftClone
 
 ARTIFACT_DIR = Path("test_artifacts")
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,6 +66,43 @@ class HeadlessE2ETest(unittest.TestCase):
             self.assertGreater(screenshot_path.stat().st_size, 0)
         finally:
             game.destroy()
+
+    def test_spawn_is_randomized_and_valid_for_same_seed(self):
+        runs = 10
+        seed = random.SystemRandom().randint(0, 2_147_483_647)
+        spawn_positions = []
+
+        for _ in range(runs):
+            game = MinecraftClone(capture_mouse=False, seed=seed)
+            try:
+                spawn = game.player_pos
+                spawn_positions.append((spawn.x, spawn.y, spawn.z))
+
+                self.assertFalse(
+                    game.collides_with_block(spawn.x, spawn.y, spawn.z),
+                    msg=f"Spawned inside a block at {spawn}",
+                )
+
+                feet_z = spawn.z - PLAYER_HEIGHT
+                ground_z = game.highest_ground_z(
+                    spawn.x,
+                    spawn.y,
+                    feet_z,
+                    support_tolerance=0.1,
+                )
+                self.assertGreaterEqual(
+                    feet_z,
+                    ground_z,
+                    msg=f"Spawned below platform/ground. feet_z={feet_z:.2f}, ground_z={ground_z:.2f}",
+                )
+            finally:
+                game.destroy()
+
+        self.assertGreaterEqual(
+            len(set(spawn_positions)),
+            2,
+            msg=f"Spawn did not randomize across {runs} runs for the same seed {seed}",
+        )
 
     def test_camera_does_not_clip_into_wall_in_test_environment(self):
         platform_size = 8

@@ -7,6 +7,7 @@ A small Minecraft-style prototype built with **Python + Panda3D**.
 - Mouse-look with pointer lock behavior
 - Seed-based randomized terrain platform
 - One generated tree (log + leaves) at a seed-based location on the platform
+- Spawn point randomized each run (not tied to seed)
 - Basic gravity and jumping
 - Place/remove blocks with mouse
 - Light-gray plus crosshair with empty center

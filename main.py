@@ -80,6 +80,7 @@ class MinecraftClone(ShowBase):
         self.capture_mouse = capture_mouse
         self.mouse_capture_enabled = False
         self.seed = seed if seed is not None else random.SystemRandom().randint(0, 2_147_483_647)
+        self.spawn_rng = random.SystemRandom()
         self.rng = random.Random(self.seed)
 
         self.terrain_frequency_x = self.rng.uniform(0.22, 0.40)
@@ -104,11 +105,11 @@ class MinecraftClone(ShowBase):
         self.cube_model = self.loader.loadModel("models/box")
         self.generate_world(WORLD_SIZE)
 
-        start_x = WORLD_SIZE // 2
-        start_z = WORLD_SIZE // 2
+        start_x = self.spawn_rng.randrange(1, WORLD_SIZE - 1)
+        start_z = self.spawn_rng.randrange(1, WORLD_SIZE - 1)
         start_ground = self.column_tops.get((start_x, start_z), self.terrain_height(start_x, start_z) - 1) + 1
-
-        self.player_pos = Vec3(start_x + 0.5, start_z + 0.5, start_ground + PLAYER_HEIGHT + 6.0)
+        self.spawn_pos = Vec3(start_x + 0.5, start_z + 0.5, start_ground + PLAYER_HEIGHT + 6.0)
+        self.player_pos = Vec3(self.spawn_pos)
         self.player_velocity_z = 0.0
         self.player_grounded = False
         self.yaw = 45.0
@@ -572,9 +573,7 @@ class MinecraftClone(ShowBase):
             self.player_grounded = False
 
         if self.player_pos.z < -25:
-            center = WORLD_SIZE // 2
-            ground = self.column_tops.get((center, center), self.terrain_height(center, center) - 1) + 1
-            self.player_pos = Vec3(center + 0.5, center + 0.5, ground + PLAYER_HEIGHT + 6.0)
+            self.player_pos = Vec3(self.spawn_pos)
             self.player_velocity_z = 0.0
 
     def update_camera(self):
