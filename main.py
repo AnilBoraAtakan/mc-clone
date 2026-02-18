@@ -27,7 +27,7 @@ MAX_HEIGHT = 7
 PLAYER_HEIGHT = 1.8
 PLAYER_RADIUS = 0.30
 PLAYER_MODEL_BLOCK_SCALE = PLAYER_HEIGHT / 2.0
-CAMERA_OFFSET_FROM_TOP = PLAYER_MODEL_BLOCK_SCALE * 0.5
+CAMERA_OFFSET_FROM_TOP = PLAYER_HEIGHT * 0.25
 WALK_SPEED = 5.0
 SPRINT_SPEED = 8.0
 GRAVITY = 24.0
@@ -42,6 +42,8 @@ BLOCK_TEXTURE_FILES = {
     "grass": "grass_block.png",
     "dirt": "dirt_block.png",
     "stone": "stone_block.png",
+    "log": "log_block.png",
+    "leaves": "leaves_block.png",
 }
 
 NEIGHBOR_OFFSETS = (
@@ -52,6 +54,10 @@ NEIGHBOR_OFFSETS = (
     (0, 0, 1),
     (0, 0, -1),
 )
+
+TREE_TRUNK_HEIGHT = 5
+TREE_LEAVES_HEIGHT = 4
+TREE_LEAF_RADIUS_BY_LEVEL = (2, 2, 1, 1)
 
 
 def terrain_height(x: int, z: int) -> int:
@@ -281,10 +287,45 @@ class MinecraftClone(ShowBase):
                 for y in range(top):
                     self.insert_block_data((x, y, z), block_type_for_layer(y, top))
 
+        self.generate_tree(size)
+
         for key, block_type in self.blocks.items():
             if self.is_block_exposed(key):
                 self.create_block_node(key, block_type)
         self.collect_dirty_chunks(max(len(self.dirty_chunk_keys), 1))
+
+    def generate_tree(self, world_size: int):
+        tree_x = min(max((world_size // 2) + 5, 2), world_size - 3)
+        tree_z = min(max((world_size // 2) + 5, 2), world_size - 3)
+        ground_y = self.column_tops.get((tree_x, tree_z))
+        if ground_y is None:
+            return
+
+        trunk_base_y = ground_y + 1
+        trunk_top_y = trunk_base_y + TREE_TRUNK_HEIGHT - 1
+        for y in range(trunk_base_y, trunk_base_y + TREE_TRUNK_HEIGHT):
+            self.insert_block_data((tree_x, y, tree_z), "log")
+
+        leaf_start_y = trunk_top_y - 1
+        for level in range(TREE_LEAVES_HEIGHT):
+            leaf_y = leaf_start_y + level
+            radius = TREE_LEAF_RADIUS_BY_LEVEL[level]
+            is_top_layer = level == (TREE_LEAVES_HEIGHT - 1)
+            for dx in range(-radius, radius + 1):
+                for dz in range(-radius, radius + 1):
+                    if radius > 1 and abs(dx) == radius and abs(dz) == radius:
+                        continue
+
+                    if is_top_layer and abs(dx) + abs(dz) > 1:
+                        continue
+
+                    if level < 2 and dx == 0 and dz == 0:
+                        continue
+
+                    key = (tree_x + dx, leaf_y, tree_z + dz)
+                    if key in self.blocks:
+                        continue
+                    self.insert_block_data(key, "leaves")
 
     def setup_controls(self):
         for key in ("w", "a", "s", "d", "shift"):

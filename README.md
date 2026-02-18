@@ -6,6 +6,7 @@ A small Minecraft-style prototype built with **Python + Panda3D**.
 - First-person playable character
 - Mouse-look with pointer lock behavior
 - Generated textured block terrain
+- One generated tree (log + leaves) on world spawn terrain
 - Basic gravity and jumping
 - Place/remove blocks with mouse
 - Light-gray plus crosshair with empty center
