@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from math import cos, floor, sin
+import argparse
+from math import cos, floor, pi, sin
 from pathlib import Path
+import random
 
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
@@ -59,13 +61,6 @@ TREE_TRUNK_HEIGHT = 5
 TREE_LEAVES_HEIGHT = 4
 TREE_LEAF_RADIUS_BY_LEVEL = (2, 2, 1, 1)
 
-
-def terrain_height(x: int, z: int) -> int:
-    wave = sin(x * 0.32) + cos(z * 0.29)
-    height = int(BASE_HEIGHT + wave * HEIGHT_VARIATION)
-    return max(1, min(MAX_HEIGHT, height))
-
-
 def block_type_for_layer(y: int, top: int) -> str:
     if y == top - 1:
         return "grass"
@@ -75,7 +70,7 @@ def block_type_for_layer(y: int, top: int) -> str:
 
 
 class MinecraftClone(ShowBase):
-    def __init__(self, capture_mouse: bool = True):
+    def __init__(self, capture_mouse: bool = True, seed: int | None = None):
         super().__init__()
         self.disableMouse()
         self.setBackgroundColor(0.49, 0.72, 0.98, 1)
@@ -84,6 +79,15 @@ class MinecraftClone(ShowBase):
         self.cam.node().setCameraMask(self.world_camera_mask)
         self.capture_mouse = capture_mouse
         self.mouse_capture_enabled = False
+        self.seed = seed if seed is not None else random.SystemRandom().randint(0, 2_147_483_647)
+        self.rng = random.Random(self.seed)
+
+        self.terrain_frequency_x = self.rng.uniform(0.22, 0.40)
+        self.terrain_frequency_z = self.rng.uniform(0.22, 0.40)
+        self.terrain_phase_x = self.rng.uniform(0.0, pi * 2.0)
+        self.terrain_phase_z = self.rng.uniform(0.0, pi * 2.0)
+        self.terrain_variation = self.rng.uniform(HEIGHT_VARIATION * 0.7, HEIGHT_VARIATION * 1.4)
+        self.terrain_bias = self.rng.uniform(-0.45, 0.45)
 
         self.texture_dir = Path(__file__).resolve().parent / "assets" / "textures"
         self.block_textures = self.load_block_textures()
@@ -102,7 +106,7 @@ class MinecraftClone(ShowBase):
 
         start_x = WORLD_SIZE // 2
         start_z = WORLD_SIZE // 2
-        start_ground = self.column_tops.get((start_x, start_z), terrain_height(start_x, start_z) - 1) + 1
+        start_ground = self.column_tops.get((start_x, start_z), self.terrain_height(start_x, start_z) - 1) + 1
 
         self.player_pos = Vec3(start_x + 0.5, start_z + 0.5, start_ground + PLAYER_HEIGHT + 6.0)
         self.player_velocity_z = 0.0
@@ -128,6 +132,15 @@ class MinecraftClone(ShowBase):
         self.update_camera()
 
         self.taskMgr.add(self.update, "update")
+
+    def terrain_height(self, x: int, z: int) -> int:
+        wave = (
+            sin((x * self.terrain_frequency_x) + self.terrain_phase_x)
+            + cos((z * self.terrain_frequency_z) + self.terrain_phase_z)
+            + self.terrain_bias
+        )
+        height = int(BASE_HEIGHT + (wave * self.terrain_variation))
+        return max(1, min(MAX_HEIGHT, height))
 
     def load_block_textures(self):
         textures = {}
@@ -283,7 +296,7 @@ class MinecraftClone(ShowBase):
     def generate_world(self, size: int):
         for x in range(size):
             for z in range(size):
-                top = terrain_height(x, z)
+                top = self.terrain_height(x, z)
                 for y in range(top):
                     self.insert_block_data((x, y, z), block_type_for_layer(y, top))
 
@@ -295,8 +308,12 @@ class MinecraftClone(ShowBase):
         self.collect_dirty_chunks(max(len(self.dirty_chunk_keys), 1))
 
     def generate_tree(self, world_size: int):
-        tree_x = min(max((world_size // 2) + 5, 2), world_size - 3)
-        tree_z = min(max((world_size // 2) + 5, 2), world_size - 3)
+        min_x = 2
+        min_z = 2
+        max_x = world_size - 3
+        max_z = world_size - 3
+        tree_x = self.rng.randint(min_x, max_x)
+        tree_z = self.rng.randint(min_z, max_z)
         ground_y = self.column_tops.get((tree_x, tree_z))
         if ground_y is None:
             return
@@ -382,6 +399,15 @@ class MinecraftClone(ShowBase):
         self.aspect2d.attachNewNode(crosshair.create())
 
     def create_help_text(self):
+        OnscreenText(
+            text=f"Seed: {self.seed}",
+            pos=(-1.32, 0.92),
+            scale=0.05,
+            fg=(0.93, 0.97, 1, 1),
+            align=TextNode.ALeft,
+            mayChange=False,
+        )
+
         OnscreenText(
             text="WASD move | Mouse look | Shift sprint | Space jump | LMB place | RMB remove | Esc quit",
             pos=(-1.32, -0.95),
@@ -547,7 +573,7 @@ class MinecraftClone(ShowBase):
 
         if self.player_pos.z < -25:
             center = WORLD_SIZE // 2
-            ground = self.column_tops.get((center, center), terrain_height(center, center) - 1) + 1
+            ground = self.column_tops.get((center, center), self.terrain_height(center, center) - 1) + 1
             self.player_pos = Vec3(center + 0.5, center + 0.5, ground + PLAYER_HEIGHT + 6.0)
             self.player_velocity_z = 0.0
 
@@ -629,6 +655,18 @@ class MinecraftClone(ShowBase):
         return task.cont
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Python Minecraft-Style Starter")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed used for terrain and tree placement. If omitted, a random seed is chosen.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    game = MinecraftClone()
+    args = parse_args()
+    game = MinecraftClone(seed=args.seed)
     game.run()

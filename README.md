@@ -5,8 +5,8 @@ A small Minecraft-style prototype built with **Python + Panda3D**.
 ## Features
 - First-person playable character
 - Mouse-look with pointer lock behavior
-- Generated textured block terrain
-- One generated tree (log + leaves) on world spawn terrain
+- Seed-based randomized terrain platform
+- One generated tree (log + leaves) at a seed-based location on the platform
 - Basic gravity and jumping
 - Place/remove blocks with mouse
 - Light-gray plus crosshair with empty center
@@ -18,7 +18,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python main.py
+python main.py --seed 12345
 ```
+
+If `--seed` is omitted, a random seed is chosen automatically.
 
 ## Controls
 - `WASD`: move
@@ -28,6 +31,8 @@ python main.py
 - `Left click`: place block
 - `Right click`: remove block
 - `Esc`: quit
+
+The active seed is shown on screen every run.
 
 ## Screenshots
 
