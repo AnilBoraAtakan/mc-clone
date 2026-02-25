@@ -14,6 +14,7 @@ from panda3d.core import (
     NodePath,
     RigidBodyCombiner,
     SamplerState,
+    TextureStage,
     TextNode,
     Vec3,
     WindowProperties,
@@ -51,6 +52,14 @@ BLOCK_TEXTURE_FILES = {
 }
 LOG_END_TEXTURE_FILE = "log_top_bottom.png"
 
+CHEST_TEXTURE_FILES = {
+    "chest_front": "chest_front.png",
+    "chest_back": "chest_back.png",
+    "chest_side": "chest_side.png",
+    "chest_top": "chest_top.png",
+    "chest_bottom": "chest_bottom.png",
+}
+
 NEIGHBOR_OFFSETS = (
     (1, 0, 0),
     (-1, 0, 0),
@@ -65,6 +74,9 @@ TREE_LEAVES_HEIGHT = 4
 TREE_LEAF_RADIUS_BY_LEVEL = (2, 2, 1, 1)
 TREE_MIN_EDGE_PADDING = 2
 TREE_MAX_COUNT = 15
+
+CHEST_MIN_EDGE_PADDING = 1
+CHEST_COUNT = 1
 
 def block_type_for_layer(y: int, top: int) -> str:
     if y == top - 1:
@@ -90,6 +102,7 @@ class MinecraftClone(ShowBase):
         self.spawn_rng = random.Random(self.seed ^ 0x9E3779B9)
         self.rng = random.Random(self.seed)
         self.tree_rng = random.Random(self.seed ^ 0xA5A5A5A5)
+        self.chest_rng = random.Random(self.seed ^ 0xC3C3C3C3)
 
         self.terrain_frequency_x = self.rng.uniform(0.22, 0.40)
         self.terrain_frequency_z = self.rng.uniform(0.22, 0.40)
@@ -112,6 +125,7 @@ class MinecraftClone(ShowBase):
 
         self.cube_model = self.loader.loadModel("models/box")
         self.log_model_template = self.create_log_model_template()
+        self.chest_model_template = self.create_chest_model_template()
         self.generate_world(WORLD_SIZE)
 
         start_x = self.spawn_rng.randrange(1, WORLD_SIZE - 1)
@@ -131,6 +145,7 @@ class MinecraftClone(ShowBase):
             "d": False,
             "shift": False,
         }
+        self.selected_block_type = "grass"
 
         self.setup_controls()
         self.create_player_model()
@@ -166,6 +181,13 @@ class MinecraftClone(ShowBase):
         log_end_texture.setMagfilter(SamplerState.FT_nearest)
         log_end_texture.setMinfilter(SamplerState.FT_nearest)
         textures["log_end"] = log_end_texture
+
+        for key, file_name in CHEST_TEXTURE_FILES.items():
+            texture_path = self.texture_dir / file_name
+            texture = self.loader.loadTexture(str(texture_path))
+            texture.setMagfilter(SamplerState.FT_nearest)
+            texture.setMinfilter(SamplerState.FT_nearest)
+            textures[key] = texture
         return textures
 
     def create_log_model_template(self):
@@ -194,6 +216,61 @@ class MinecraftClone(ShowBase):
             face.setHpr(hpr)
             face.setTexture(texture, 1)
             face.setTwoSided(True)
+
+        return root
+
+    def create_chest_model_template(self):
+        # Render chest as a full 1x1x1 block. Collision remains block-based.
+        chest_size = 1.0
+        chest_height = 1.0
+        half = chest_size / 2.0
+        half_height = chest_height / 2.0
+
+        front = self.block_textures["chest_front"]
+        back = self.block_textures["chest_back"]
+        side = self.block_textures["chest_side"]
+        top = self.block_textures["chest_top"]
+        bottom = self.block_textures["chest_bottom"]
+
+        root = NodePath("chest_model_template")
+        geom_root = root.attachNewNode("chest_geom")
+        geom_root.setPos(0.5, 0.5, 0.5)
+
+        # One reusable quad in the X/Z plane, centered at origin.
+        def add_face(name: str, pos: Vec3, hpr: Vec3, texture):
+            card = CardMaker(name)
+            card.setFrame(-half, half, -half_height, half_height)
+            face = geom_root.attachNewNode(card.generate())
+            face.setPos(pos)
+            face.setHpr(hpr)
+            face.setTexture(texture, 1)
+            # CardMaker's default V axis ends up inverted relative to how our generated
+            # chest textures are painted; flip V so the textures read upright.
+            face.setTexScale(TextureStage.getDefault(), 1.0, -1.0)
+            face.setTexOffset(TextureStage.getDefault(), 0.0, 1.0)
+            face.setTwoSided(True)
+
+        add_face("chest_face_front", Vec3(0.0, half, 0.0), Vec3(0.0, 0.0, 0.0), front)
+        add_face("chest_face_back", Vec3(0.0, -half, 0.0), Vec3(180.0, 0.0, 0.0), back)
+        add_face("chest_face_right", Vec3(half, 0.0, 0.0), Vec3(-90.0, 0.0, 0.0), side)
+        add_face("chest_face_left", Vec3(-half, 0.0, 0.0), Vec3(90.0, 0.0, 0.0), side)
+
+        # Top/bottom use a square card (X/Z in local), rotated into X/Y at +/-Z.
+        card = CardMaker("chest_face_top")
+        card.setFrame(-half, half, -half, half)
+        top_face = geom_root.attachNewNode(card.generate())
+        top_face.setPos(0.0, 0.0, half_height)
+        top_face.setHpr(0.0, -90.0, 0.0)
+        top_face.setTexture(top, 1)
+        top_face.setTwoSided(True)
+
+        card = CardMaker("chest_face_bottom")
+        card.setFrame(-half, half, -half, half)
+        bottom_face = geom_root.attachNewNode(card.generate())
+        bottom_face.setPos(0.0, 0.0, -half_height)
+        bottom_face.setHpr(0.0, 90.0, 0.0)
+        bottom_face.setTexture(bottom, 1)
+        bottom_face.setTwoSided(True)
 
         return root
 
@@ -255,10 +332,12 @@ class MinecraftClone(ShowBase):
         chunk_root = self.ensure_chunk(chunk_key)
         if block_type == "log":
             node = self.log_model_template.copyTo(chunk_root)
+        elif block_type == "chest":
+            node = self.chest_model_template.copyTo(chunk_root)
         else:
             node = self.cube_model.copyTo(chunk_root)
         node.setPos(self.block_key_to_world_center(key))
-        if block_type != "log":
+        if block_type not in {"log", "chest"}:
             node.setTexture(self.block_textures[block_type], 1)
         self.block_nodes[key] = node
         self.block_chunk_keys[key] = chunk_key
@@ -350,6 +429,7 @@ class MinecraftClone(ShowBase):
                     self.insert_block_data((x, y, z), block_type_for_layer(y, top))
 
         self.generate_trees(size)
+        self.generate_chests(size)
 
         for key, block_type in self.blocks.items():
             if self.is_block_exposed(key):
@@ -424,10 +504,55 @@ class MinecraftClone(ShowBase):
             if self.place_tree(tree_x, tree_z):
                 trees_placed += 1
 
+    def can_place_chest(self, chest_x: int, chest_z: int, chest_y: int) -> bool:
+        key = (chest_x, chest_y, chest_z)
+        if key in self.blocks:
+            return False
+        ground_key = (chest_x, chest_y - 1, chest_z)
+        ground_type = self.blocks.get(ground_key)
+        if ground_type is None:
+            return False
+        # Don't place a chest on leaf canopy blocks.
+        if ground_type == "leaves":
+            return False
+        return True
+
+    def generate_chests(self, world_size: int):
+        # One chest per world for now (if a valid location exists).
+        min_x = CHEST_MIN_EDGE_PADDING
+        min_z = CHEST_MIN_EDGE_PADDING
+        max_x = world_size - CHEST_MIN_EDGE_PADDING - 1
+        max_z = world_size - CHEST_MIN_EDGE_PADDING - 1
+        if min_x > max_x or min_z > max_z or CHEST_COUNT <= 0:
+            return
+
+        candidate_positions = []
+        for chest_x in range(min_x, max_x + 1):
+            for chest_z in range(min_z, max_z + 1):
+                candidate_positions.append((chest_x, chest_z))
+
+        self.chest_rng.shuffle(candidate_positions)
+        placed = 0
+        for chest_x, chest_z in candidate_positions:
+            chest_y = self.terrain_height(chest_x, chest_z)
+            if not self.can_place_chest(chest_x, chest_z, chest_y):
+                continue
+            self.insert_block_data((chest_x, chest_y, chest_z), "chest")
+            placed += 1
+            if placed >= CHEST_COUNT:
+                return
+
     def setup_controls(self):
         for key in ("w", "a", "s", "d", "shift"):
             self.accept(key, self.set_key, [key, True])
             self.accept(f"{key}-up", self.set_key, [key, False])
+
+        self.accept("1", self.set_selected_block, ["grass"])
+        self.accept("2", self.set_selected_block, ["dirt"])
+        self.accept("3", self.set_selected_block, ["stone"])
+        self.accept("4", self.set_selected_block, ["log"])
+        self.accept("5", self.set_selected_block, ["leaves"])
+        self.accept("6", self.set_selected_block, ["chest"])
 
         self.accept("space", self.try_jump)
         self.accept("mouse1", self.on_left_click)
@@ -436,6 +561,11 @@ class MinecraftClone(ShowBase):
 
     def set_key(self, key: str, value: bool):
         self.keys[key] = value
+
+    def set_selected_block(self, block_type: str):
+        self.selected_block_type = block_type
+        if hasattr(self, "selected_block_text") and self.selected_block_text is not None:
+            self.selected_block_text.setText(f"Block: {self.selected_block_type}")
 
     def enable_mouse_capture(self) -> bool:
         if self.win is None:
@@ -486,6 +616,15 @@ class MinecraftClone(ShowBase):
             fg=(0.93, 0.97, 1, 1),
             align=TextNode.ALeft,
             mayChange=False,
+        )
+
+        self.selected_block_text = OnscreenText(
+            text=f"Block: {self.selected_block_type}",
+            pos=(-1.32, 0.84),
+            scale=0.045,
+            fg=(0.93, 0.97, 1, 1),
+            align=TextNode.ALeft,
+            mayChange=True,
         )
 
         OnscreenText(
@@ -720,7 +859,7 @@ class MinecraftClone(ShowBase):
         if self.block_overlaps_player(place_key):
             return
 
-        self.add_block(place_key, "grass")
+        self.add_block(place_key, self.selected_block_type)
 
     def update(self, task):
         dt = globalClock.getDt()

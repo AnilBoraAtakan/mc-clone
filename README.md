@@ -7,6 +7,7 @@ A small Minecraft-style prototype built with **Python + Panda3D**.
 - Mouse-look with pointer lock behavior
 - Seed-based randomized terrain platform
 - Seed-determined tree generation (count is 0..15 and locations vary by seed)
+- Seed-determined chest placement (location varies by seed, always placed above terrain)
 - Spawn point determined by seed (same seed => same spawn)
 - Basic gravity and jumping
 - Place/remove blocks with mouse
@@ -41,6 +42,12 @@ Log side:
 Log top/bottom:
 
 ![Log top/bottom](assets/textures/log_top_bottom.png)
+
+Chest (front/side/top):
+
+![Chest front](assets/textures/chest_front.png)
+![Chest side](assets/textures/chest_side.png)
+![Chest top](assets/textures/chest_top.png)
 
 ## Controls
 - `WASD`: move

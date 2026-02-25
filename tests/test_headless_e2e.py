@@ -72,6 +72,14 @@ class HeadlessE2ETest(unittest.TestCase):
                 return distance
         return None
 
+    def chest_keys(self, game: MinecraftClone) -> list[tuple[int, int, int]]:
+        keys = []
+        for key, block_type in game.blocks.items():
+            if block_type == "chest":
+                keys.append(key)
+        keys.sort()
+        return keys
+
     def world_to_pixel(
         self,
         game: MinecraftClone,
@@ -244,6 +252,57 @@ class HeadlessE2ETest(unittest.TestCase):
             msg="Spawn is identical across different seeds; expected seed-based variation",
         )
 
+    def test_chest_locations_are_seed_deterministic_and_grounded(self):
+        seed = 24681357
+        runs = 4
+        chest_sets = []
+
+        for _ in range(runs):
+            game = MinecraftClone(capture_mouse=False, seed=seed)
+            try:
+                chest_sets.append(tuple(self.chest_keys(game)))
+            finally:
+                game.destroy()
+
+        self.assertEqual(
+            len(set(chest_sets)),
+            1,
+            msg=f"Chest locations changed across runs for seed {seed}",
+        )
+
+        game = MinecraftClone(capture_mouse=False, seed=seed)
+        try:
+            chests = self.chest_keys(game)
+            self.assertGreaterEqual(len(chests), 1, msg="Expected at least one chest in the world")
+            for x, y, z in chests:
+                expected_y = game.terrain_height(x, z)
+                self.assertEqual(
+                    y,
+                    expected_y,
+                    msg=f"Chest at {(x, y, z)} is not above terrain surface (expected y={expected_y})",
+                )
+                self.assertIn(
+                    (x, y - 1, z),
+                    game.blocks,
+                    msg=f"No supporting ground block under chest {(x, y, z)}",
+                )
+        finally:
+            game.destroy()
+
+        across_seed_chest_sets = []
+        for candidate_seed in range(16):
+            game = MinecraftClone(capture_mouse=False, seed=candidate_seed)
+            try:
+                across_seed_chest_sets.append(tuple(self.chest_keys(game)))
+            finally:
+                game.destroy()
+
+        self.assertGreater(
+            len(set(across_seed_chest_sets)),
+            1,
+            msg="Chest locations are identical across tested seeds; expected seed-based variation",
+        )
+
     def test_log_texture_is_centered_per_block(self):
         game = MinecraftClone(capture_mouse=False, seed=1)
         try:
@@ -395,6 +454,36 @@ class HeadlessE2ETest(unittest.TestCase):
             self.assertGreater(screenshot.getYSize(), 0)
 
             screenshot_path = ARTIFACT_DIR / "log_on_block_on_platform.png"
+            wrote_file = screenshot.write(str(screenshot_path))
+            self.assertTrue(wrote_file)
+            self.assertTrue(screenshot_path.exists())
+            self.assertGreater(screenshot_path.stat().st_size, 0)
+        finally:
+            game.destroy()
+
+    def test_chest_on_block_on_platform_screenshot(self):
+        game = MinecraftClone(capture_mouse=False, seed=1)
+        try:
+            game.aspect2d.hide()
+            self.clear_world(game)
+
+            center_x = 10
+            center_z = 10
+            self.add_platform_under_logs(game, center_x, center_z, size=9, y=-1, block_type="stone")
+            game.add_block((center_x, 0, center_z), "stone")
+            game.add_block((center_x, 1, center_z), "chest")
+            game.collect_dirty_chunks(max(len(game.dirty_chunk_keys), 1))
+
+            target = game.block_key_to_world_center((center_x, 1, center_z)) + Vec3(0.5, 0.5, 0.5)
+            game.camera.setPos(target + Vec3(-6.0, -8.0, 4.5))
+            game.camera.lookAt(target)
+            self.render_frames(game, frames=3)
+
+            screenshot = game.win.getScreenshot()
+            self.assertGreater(screenshot.getXSize(), 0)
+            self.assertGreater(screenshot.getYSize(), 0)
+
+            screenshot_path = ARTIFACT_DIR / "chest_on_block_on_platform.png"
             wrote_file = screenshot.write(str(screenshot_path))
             self.assertTrue(wrote_file)
             self.assertTrue(screenshot_path.exists())
