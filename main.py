@@ -9,7 +9,9 @@ from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
     BitMask32,
+    CardMaker,
     LineSegs,
+    NodePath,
     RigidBodyCombiner,
     SamplerState,
     TextNode,
@@ -44,9 +46,10 @@ BLOCK_TEXTURE_FILES = {
     "grass": "grass_block.png",
     "dirt": "dirt_block.png",
     "stone": "stone_block.png",
-    "log": "log_block.png",
+    "log": "log_side.png",
     "leaves": "leaves_block.png",
 }
+LOG_END_TEXTURE_FILE = "log_top_bottom.png"
 
 NEIGHBOR_OFFSETS = (
     (1, 0, 0),
@@ -60,6 +63,8 @@ NEIGHBOR_OFFSETS = (
 TREE_TRUNK_HEIGHT = 5
 TREE_LEAVES_HEIGHT = 4
 TREE_LEAF_RADIUS_BY_LEVEL = (2, 2, 1, 1)
+TREE_MIN_EDGE_PADDING = 2
+TREE_MAX_COUNT = 15
 
 def block_type_for_layer(y: int, top: int) -> str:
     if y == top - 1:
@@ -80,8 +85,11 @@ class MinecraftClone(ShowBase):
         self.capture_mouse = capture_mouse
         self.mouse_capture_enabled = False
         self.seed = seed if seed is not None else random.SystemRandom().randint(0, 2_147_483_647)
-        self.spawn_rng = random.SystemRandom()
+        # Keep spawn selection deterministic for a given seed while decoupling it from
+        # terrain/tree RNG draw order.
+        self.spawn_rng = random.Random(self.seed ^ 0x9E3779B9)
         self.rng = random.Random(self.seed)
+        self.tree_rng = random.Random(self.seed ^ 0xA5A5A5A5)
 
         self.terrain_frequency_x = self.rng.uniform(0.22, 0.40)
         self.terrain_frequency_z = self.rng.uniform(0.22, 0.40)
@@ -103,6 +111,7 @@ class MinecraftClone(ShowBase):
         self.dirty_chunk_keys: set[tuple[int, int]] = set()
 
         self.cube_model = self.loader.loadModel("models/box")
+        self.log_model_template = self.create_log_model_template()
         self.generate_world(WORLD_SIZE)
 
         start_x = self.spawn_rng.randrange(1, WORLD_SIZE - 1)
@@ -151,7 +160,42 @@ class MinecraftClone(ShowBase):
             texture.setMagfilter(SamplerState.FT_nearest)
             texture.setMinfilter(SamplerState.FT_nearest)
             textures[block_type] = texture
+
+        log_end_path = self.texture_dir / LOG_END_TEXTURE_FILE
+        log_end_texture = self.loader.loadTexture(str(log_end_path))
+        log_end_texture.setMagfilter(SamplerState.FT_nearest)
+        log_end_texture.setMinfilter(SamplerState.FT_nearest)
+        textures["log_end"] = log_end_texture
         return textures
+
+    def create_log_model_template(self):
+        side_texture = self.block_textures["log"]
+        end_texture = self.block_textures["log_end"]
+        root = NodePath("log_model_template")
+        # Panda3D's built-in box model spans (0..1) with origin at the min corner.
+        # Shift the log faces to match that coordinate system so logs align with other blocks.
+        geom_root = root.attachNewNode("log_geom")
+        geom_root.setPos(0.5, 0.5, 0.5)
+
+        face_specs = (
+            (Vec3(0.0, 0.5, 0.0), Vec3(0.0, 0.0, 0.0), side_texture),
+            (Vec3(0.0, -0.5, 0.0), Vec3(180.0, 0.0, 0.0), side_texture),
+            (Vec3(0.5, 0.0, 0.0), Vec3(-90.0, 0.0, 0.0), side_texture),
+            (Vec3(-0.5, 0.0, 0.0), Vec3(90.0, 0.0, 0.0), side_texture),
+            (Vec3(0.0, 0.0, 0.5), Vec3(0.0, -90.0, 0.0), end_texture),
+            (Vec3(0.0, 0.0, -0.5), Vec3(0.0, 90.0, 0.0), end_texture),
+        )
+
+        for index, (position, hpr, texture) in enumerate(face_specs):
+            card = CardMaker(f"log_face_{index}")
+            card.setFrame(-0.5, 0.5, -0.5, 0.5)
+            face = geom_root.attachNewNode(card.generate())
+            face.setPos(position)
+            face.setHpr(hpr)
+            face.setTexture(texture, 1)
+            face.setTwoSided(True)
+
+        return root
 
     def create_player_model(self):
         self.player_model_root = self.render.attachNewNode("player_model")
@@ -209,9 +253,13 @@ class MinecraftClone(ShowBase):
     def create_block_node(self, key: tuple[int, int, int], block_type: str):
         chunk_key = self.chunk_key_from_block_key(key)
         chunk_root = self.ensure_chunk(chunk_key)
-        node = self.cube_model.copyTo(chunk_root)
+        if block_type == "log":
+            node = self.log_model_template.copyTo(chunk_root)
+        else:
+            node = self.cube_model.copyTo(chunk_root)
         node.setPos(self.block_key_to_world_center(key))
-        node.setTexture(self.block_textures[block_type], 1)
+        if block_type != "log":
+            node.setTexture(self.block_textures[block_type], 1)
         self.block_nodes[key] = node
         self.block_chunk_keys[key] = chunk_key
         self.dirty_chunk_keys.add(chunk_key)
@@ -301,29 +349,14 @@ class MinecraftClone(ShowBase):
                 for y in range(top):
                     self.insert_block_data((x, y, z), block_type_for_layer(y, top))
 
-        self.generate_tree(size)
+        self.generate_trees(size)
 
         for key, block_type in self.blocks.items():
             if self.is_block_exposed(key):
                 self.create_block_node(key, block_type)
         self.collect_dirty_chunks(max(len(self.dirty_chunk_keys), 1))
 
-    def generate_tree(self, world_size: int):
-        min_x = 2
-        min_z = 2
-        max_x = world_size - 3
-        max_z = world_size - 3
-        tree_x = self.rng.randint(min_x, max_x)
-        tree_z = self.rng.randint(min_z, max_z)
-        ground_y = self.column_tops.get((tree_x, tree_z))
-        if ground_y is None:
-            return
-
-        trunk_base_y = ground_y + 1
-        trunk_top_y = trunk_base_y + TREE_TRUNK_HEIGHT - 1
-        for y in range(trunk_base_y, trunk_base_y + TREE_TRUNK_HEIGHT):
-            self.insert_block_data((tree_x, y, tree_z), "log")
-
+    def tree_leaf_keys(self, tree_x: int, tree_z: int, trunk_top_y: int):
         leaf_start_y = trunk_top_y - 1
         for level in range(TREE_LEAVES_HEIGHT):
             leaf_y = leaf_start_y + level
@@ -340,10 +373,56 @@ class MinecraftClone(ShowBase):
                     if level < 2 and dx == 0 and dz == 0:
                         continue
 
-                    key = (tree_x + dx, leaf_y, tree_z + dz)
-                    if key in self.blocks:
-                        continue
-                    self.insert_block_data(key, "leaves")
+                    yield (tree_x + dx, leaf_y, tree_z + dz)
+
+    def can_place_tree(self, tree_x: int, tree_z: int, trunk_base_y: int) -> bool:
+        trunk_top_y = trunk_base_y + TREE_TRUNK_HEIGHT - 1
+
+        for y in range(trunk_base_y, trunk_base_y + TREE_TRUNK_HEIGHT):
+            if (tree_x, y, tree_z) in self.blocks:
+                return False
+
+        for key in self.tree_leaf_keys(tree_x, tree_z, trunk_top_y):
+            if key in self.blocks:
+                return False
+        return True
+
+    def place_tree(self, tree_x: int, tree_z: int) -> bool:
+        ground_y = self.terrain_height(tree_x, tree_z) - 1
+        trunk_base_y = ground_y + 1
+        if not self.can_place_tree(tree_x, tree_z, trunk_base_y):
+            return False
+
+        trunk_top_y = trunk_base_y + TREE_TRUNK_HEIGHT - 1
+        for y in range(trunk_base_y, trunk_base_y + TREE_TRUNK_HEIGHT):
+            self.insert_block_data((tree_x, y, tree_z), "log")
+
+        for key in self.tree_leaf_keys(tree_x, tree_z, trunk_top_y):
+            self.insert_block_data(key, "leaves")
+        return True
+
+    def generate_trees(self, world_size: int):
+        min_x = TREE_MIN_EDGE_PADDING
+        min_z = TREE_MIN_EDGE_PADDING
+        max_x = world_size - TREE_MIN_EDGE_PADDING - 1
+        max_z = world_size - TREE_MIN_EDGE_PADDING - 1
+        if min_x > max_x or min_z > max_z:
+            return
+
+        candidate_positions = []
+        for tree_x in range(min_x, max_x + 1):
+            for tree_z in range(min_z, max_z + 1):
+                candidate_positions.append((tree_x, tree_z))
+
+        self.tree_rng.shuffle(candidate_positions)
+        target_tree_count = self.tree_rng.randint(0, TREE_MAX_COUNT)
+
+        trees_placed = 0
+        for tree_x, tree_z in candidate_positions:
+            if trees_placed >= target_tree_count:
+                return
+            if self.place_tree(tree_x, tree_z):
+                trees_placed += 1
 
     def setup_controls(self):
         for key in ("w", "a", "s", "d", "shift"):
